@@ -1,5 +1,5 @@
-# DNS Egress Control Docker Image
-# Multi-stage build for production and testing
+# DNS Egress Control Dockerfile
+# Standard Dockerfile that works with both Docker and Apple Container Tool
 
 # Build stage
 FROM golang:1.21-alpine AS builder
@@ -19,9 +19,9 @@ RUN go mod download
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o dns-egress-control .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
 
-# Runtime stage - Full featured image with iptables support
+# Runtime stage
 FROM alpine:latest
 
 WORKDIR /app
@@ -36,8 +36,7 @@ RUN apk add --no-cache \
     sudo \
     shadow \
     bind-tools \
-    curl \
-    netcat-openbsd
+    curl
 
 # Create a non-root user for security
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
@@ -64,8 +63,8 @@ echo ""
 if [ "$(id -u)" = "0" ]; then
     echo "🔧 Setting up iptables rules..."
     
-    # Set capabilities for iptables
-    setcap cap_net_admin,cap_net_raw+ep /app/dns-egress-control 2>/dev/null || true
+    # Note: For iptables support, run container with --cap-add=NET_ADMIN --cap-add=NET_RAW
+    echo "Note: For iptables support, run with --cap-add=NET_ADMIN --cap-add=NET_RAW"
     
     # Run as non-root user
     echo "🚀 Starting DNS Egress Control as appuser..."
@@ -76,23 +75,9 @@ else
 fi' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
 
-# Create health check script
-RUN echo '#!/bin/bash
-# Health check - verify DNS server is responding
-if nc -z -w 2 localhost 53 >/dev/null 2>&1; then
-    exit 0
-else
-    exit 1
-fi' > /healthcheck.sh && \
-    chmod +x /healthcheck.sh
-
 # Expose DNS port
 EXPOSE 53/udp
 EXPOSE 53/tcp
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ["/healthcheck.sh"]
 
 # Set default command
 ENTRYPOINT ["/entrypoint.sh"]

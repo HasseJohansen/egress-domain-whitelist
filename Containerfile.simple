@@ -1,0 +1,35 @@
+# Simple Containerfile for Apple Container Tool
+# Minimal configuration that works with Apple's container ecosystem
+
+# Use a single stage build for simplicity
+FROM golang:1.21-alpine
+
+WORKDIR /app
+
+# Install dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata \
+    iptables \
+    ip6tables \
+    bash \
+    bind-tools \
+    curl
+
+# Copy source files
+COPY . .
+
+# Build the application
+RUN go mod download && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
+
+# Set permissions
+RUN chmod +x /app/dns-egress-control
+
+# Expose DNS port
+EXPOSE 53/udp
+EXPOSE 53/tcp
+
+# Set the command
+CMD ["./dns-egress-control", "-interface", "eth0", "-upstream-dns", "8.8.8.8:53", "-port", "53", "-use-iptables=false"]

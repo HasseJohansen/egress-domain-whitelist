@@ -1,5 +1,5 @@
 # DNS Egress Control Containerfile for Apple Container Tool
-# This is equivalent to Dockerfile but optimized for Apple's container ecosystem
+# Compatible with Apple's container ecosystem
 
 # Build stage
 FROM golang:1.21-alpine AS builder
@@ -63,8 +63,8 @@ echo ""
 if [ "$(id -u)" = "0" ]; then
     echo "🔧 Setting up iptables rules..."
     
-    # Set capabilities for iptables
-    setcap cap_net_admin,cap_net_raw+ep /app/dns-egress-control 2>/dev/null || true
+    # Set capabilities for iptables (will be handled by container runtime)
+    echo "Note: For iptables support, run with --cap-add=NET_ADMIN --cap-add=NET_RAW"
     
     # Run as non-root user
     echo "🚀 Starting DNS Egress Control as appuser..."
@@ -74,6 +74,16 @@ else
     exec /app/dns-egress-control "$@"
 fi' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
+
+# Create health check script
+RUN echo '#!/bin/bash
+# Health check - verify DNS server is responding
+if nc -z -w 2 localhost 53 >/dev/null 2>&1; then
+    exit 0
+else
+    exit 1
+fi' > /healthcheck.sh && \
+    chmod +x /healthcheck.sh
 
 # Expose DNS port
 EXPOSE 53/udp
