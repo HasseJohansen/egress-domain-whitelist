@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  dns-egress-control:
+    build: .
+    container_name: dns-egress-control
+    hostname: dns-egress-control
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    network_mode: host
+    environment:
+      - INTERFACE=eth0
+      - UPSTREAM_DNS=8.8.8.8:53
+      - PORT=53
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    command: >
+      sh -c "
+      mkdir -p /app/logs && 
+      /app/dns-egress-control \
+        -interface eth0 \
+        -upstream-dns 8.8.8.8:53 \
+        -port 53 \
+        -domains "example.com,google.com,github.com" 
+        >> /app/logs/dns-egress-control.log 2>&1
+      "
+
+  # Optional: A test client container to verify DNS resolution
+  test-client:
+    image: alpine
+    container_name: test-client
+    network_mode: host
+    depends_on:
+      - dns-egress-control
+    command: >
+      sh -c "
+      echo 'Testing DNS resolution...' && 
+      sleep 5 && 
+      echo 'Testing with nslookup:' && 
+      nslookup example.com localhost && 
+      echo 'Testing with dig:' && 
+      dig @localhost example.com && 
+      echo 'Testing with curl:' && 
+      curl -v http://example.com --connect-timeout 5 --max-time 10 || true && 
+      echo 'Tests completed' && 
+      sleep infinity
+      "

@@ -1,46 +1,101 @@
+# DNS Egress Control Docker Image
+# Multi-stage build for production and testing
+
 # Build stage
-FROM golang:1.21 as builder
+FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    clang \
-    llvm \
-    libelf-dev \
-    linux-headers-amd64 \
-    && rm -rf /var/lib/apt/lists/*
+# Install build dependencies
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    tzdata
 
 # Copy source files
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
 
 # Build the application
-RUN go mod download
-RUN CGO_ENABLED=1 GOOS=linux go build -o egress-domain-whitelist .
+RUN CGO_ENABLED=0 GOOS=linux go build -o dns-egress-control .
 
-# Runtime stage
+# Runtime stage - Full featured image with iptables support
 FROM alpine:latest
 
 WORKDIR /app
 
-# Install dependencies
+# Install runtime dependencies
 RUN apk add --no-cache \
-    libelf \
-    zlib \
-    bash \
     iptables \
-    ip6tables
+    ip6tables \
+    bash \
+    tzdata \
+    ca-certificates \
+    sudo \
+    shadow \
+    bind-tools \
+    curl \
+    netcat-openbsd
 
-# Copy the binary
-COPY --from=builder /app/egress-domain-whitelist .
+# Create a non-root user for security
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copy configuration files
-COPY --from=builder /app/bpf_program.c .
+# Copy the binary from builder
+COPY --from=builder /app/dns-egress-control .
+COPY --from=builder /app/README.md .
+COPY --from=builder /app/EXAMPLES.md .
+COPY --from=builder /app/LICENSE .
 
-# Set capabilities for eBPF
-RUN setcap cap_net_admin,cap_sys_admin+ep /app/egress-domain-whitelist
+# Set permissions
+RUN chown appuser:appgroup /app/dns-egress-control && \
+    chmod +x /app/dns-egress-control
 
+# Create entrypoint script
+RUN echo '#!/bin/bash
+set -e
+
+echo "DNS Egress Control v1.0"
+echo "======================="
+echo ""
+
+# If running as root, set up iptables and drop privileges
+if [ "$(id -u)" = "0" ]; then
+    echo "🔧 Setting up iptables rules..."
+    
+    # Set capabilities for iptables
+    setcap cap_net_admin,cap_net_raw+ep /app/dns-egress-control 2>/dev/null || true
+    
+    # Run as non-root user
+    echo "🚀 Starting DNS Egress Control as appuser..."
+    exec su-exec appuser /app/dns-egress-control "$@"
+else
+    echo "🚀 Starting DNS Egress Control..."
+    exec /app/dns-egress-control "$@"
+fi' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Create health check script
+RUN echo '#!/bin/bash
+# Health check - verify DNS server is responding
+if nc -z -w 2 localhost 53 >/dev/null 2>&1; then
+    exit 0
+else
+    exit 1
+fi' > /healthcheck.sh && \
+    chmod +x /healthcheck.sh
+
+# Expose DNS port
 EXPOSE 53/udp
+EXPOSE 53/tcp
 
-ENTRYPOINT ["./egress-domain-whitelist"]
-CMD ["-interface", "eth0", "-upstream-dns", "8.8.8.8:53"]
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ["/healthcheck.sh"]
+
+# Set default command
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command - safe for testing without iptables
+CMD ["-interface", "eth0", "-upstream-dns", "8.8.8.8:53", "-port", "53", "-use-iptables=false"]

@@ -1,0 +1,56 @@
+# DNS Egress Control Test Docker Image
+# Simple image for testing the application in a container
+
+FROM golang:1.21-alpine
+
+WORKDIR /app
+
+# Install dependencies
+RUN apk add --no-cache \
+    iptables \
+    ip6tables \
+    bash \
+    tzdata \
+    ca-certificates \
+    sudo \
+    shadow \
+    git
+
+# Copy source files
+COPY . .
+
+# Build the application
+RUN go mod download && \
+    CGO_ENABLED=0 GOOS=linux go build -o dns-egress-control .
+
+# Set permissions
+RUN chmod +x /app/dns-egress-control
+
+# Create entrypoint script
+RUN echo '#!/bin/bash
+set -e
+
+# Print version info
+echo "DNS Egress Control - Container Version"
+echo "======================================"
+echo ""
+
+# If running as root, we can use iptables
+if [ "$(id -u)" = "0" ]; then
+    echo "Running with root privileges (iptables enabled)"
+    exec /app/dns-egress-control "$@"
+else
+    echo "Running without root privileges (iptables disabled)"
+    exec /app/dns-egress-control -use-iptables=false "$@"
+fi' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Expose DNS port
+EXPOSE 53/udp
+EXPOSE 53/tcp
+
+# Set default command
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command for testing
+CMD ["-interface", "eth0", "-upstream-dns", "8.8.8.8:53", "-port", "53", "-use-iptables=false"]
