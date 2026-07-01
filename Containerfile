@@ -13,13 +13,12 @@ RUN apk add --no-cache \
     tzdata
 
 # Copy source files
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod .
+COPY main.go .
 
-COPY . .
-
-# Build the application for Linux
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
+# Download dependencies and build
+RUN go get github.com/miekg/dns@v1.1.58 && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
 
 # Runtime stage
 FROM alpine:latest
@@ -43,9 +42,6 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 # Copy the binary from builder
 COPY --from=builder /app/dns-egress-control .
-COPY --from=builder /app/README.md .
-COPY --from=builder /app/EXAMPLES.md .
-COPY --from=builder /app/LICENSE .
 
 # Set permissions
 RUN chown appuser:appgroup /app/dns-egress-control && \
@@ -63,7 +59,7 @@ echo ""
 if [ "$(id -u)" = "0" ]; then
     echo "🔧 Setting up iptables rules..."
     
-    # Set capabilities for iptables (will be handled by container runtime)
+    # Note: For iptables support, run container with --cap-add=NET_ADMIN --cap-add=NET_RAW
     echo "Note: For iptables support, run with --cap-add=NET_ADMIN --cap-add=NET_RAW"
     
     # Run as non-root user
@@ -74,16 +70,6 @@ else
     exec /app/dns-egress-control "$@"
 fi' > /entrypoint.sh && \
     chmod +x /entrypoint.sh
-
-# Create health check script
-RUN echo '#!/bin/bash
-# Health check - verify DNS server is responding
-if nc -z -w 2 localhost 53 >/dev/null 2>&1; then
-    exit 0
-else
-    exit 1
-fi' > /healthcheck.sh && \
-    chmod +x /healthcheck.sh
 
 # Expose DNS port
 EXPOSE 53/udp
