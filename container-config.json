@@ -1,0 +1,60 @@
+{
+  "name": "dns-egress-control",
+  "version": "1.0.0",
+  "description": "DNS Egress Control with TTL-based IP whitelisting",
+  "author": "Hasse Johansen",
+  "build": {
+    "context": ".",
+    "containerfile": "Containerfile",
+    "platforms": ["linux/amd64", "linux/arm64"],
+    "tags": ["latest", "1.0.0"]
+  },
+  "run": {
+    "command": ["/entrypoint.sh"],
+    "args": [
+      "-interface", "eth0",
+      "-upstream-dns", "8.8.8.8:53",
+      "-port", "53",
+      "-use-iptables=false"
+    ],
+    "capabilities": ["NET_ADMIN", "NET_RAW"],
+    "network": "host",
+    "ports": ["53/udp", "53/tcp"],
+    "volumes": [
+      {"source": "./logs", "target": "/app/logs"}
+    ],
+    "environment": {
+      "INTERFACE": "eth0",
+      "UPSTREAM_DNS": "8.8.8.8:53",
+      "PORT": "53",
+      "USE_IPTABLES": "false"
+    }
+  },
+  "test": {
+    "command": [
+      "sh", "-c",
+      "echo 'Testing DNS resolution...' && "
+      "sleep 5 && "
+      "dig @localhost example.com +short && "
+      "nslookup example.com localhost"
+    ],
+    "ports": ["5353/udp", "5353/tcp"],
+    "environment": {
+      "PORT": "5353",
+      "USE_IPTABLES": "false"
+    }
+  },
+  "development": {
+    "mounts": [
+      {"source": ".", "target": "/app", "type": "bind"}
+    ],
+    "command": [
+      "sh", "-c",
+      "go mod download && "
+      "go build -o dns-egress-control . && "
+      "./dns-egress-control -port 5353 -use-iptables=false"
+    ],
+    "ports": ["5353/udp", "5353/tcp"],
+    "watch": ["*.go", "go.mod", "go.sum"]
+  }
+}

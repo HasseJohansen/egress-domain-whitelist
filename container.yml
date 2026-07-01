@@ -1,0 +1,111 @@
+# Apple Container Configuration for DNS Egress Control
+# This file can be used with Apple's container tool on macOS
+
+name: dns-egress-control
+version: 1.0.0
+description: DNS Egress Control with TTL-based IP whitelisting
+
+# Build configuration
+build:
+  context: .
+  containerfile: Containerfile
+  platforms:
+    - linux/amd64
+    - linux/arm64
+  tags:
+    - latest
+    - 1.0.0
+
+# Runtime configuration
+run:
+  # Command to run
+  command: ["/entrypoint.sh"]
+  
+  # Default arguments
+  args:
+    - "-interface"
+    - "eth0"
+    - "-upstream-dns"
+    - "8.8.8.8:53"
+    - "-port"
+    - "53"
+    - "-use-iptables=false"
+  
+  # Required capabilities for iptables
+  capabilities:
+    - NET_ADMIN
+    - NET_RAW
+  
+  # Network mode
+  network: host
+  
+  # Exposed ports
+  ports:
+    - "53/udp"
+    - "53/tcp"
+  
+  # Volume mounts
+  volumes:
+    - "./logs:/app/logs"
+  
+  # Environment variables
+  environment:
+    INTERFACE: eth0
+    UPSTREAM_DNS: 8.8.8.8:53
+    PORT: 53
+    USE_IPTABLES: "false"
+    DOMAINS: "example.com,google.com"
+
+# Test configuration
+test:
+  command: [
+    "sh", "-c",
+    "echo 'Testing DNS resolution...' && "
+    "sleep 5 && "
+    "dig @localhost example.com +short && "
+    "nslookup example.com localhost"
+  ]
+  ports:
+    - "5353/udp"
+    - "5353/tcp"
+  environment:
+    PORT: 5353
+    USE_IPTABLES: "false"
+
+# Development configuration
+development:
+  # Mount source code for live development
+  mounts:
+    - source: .
+      target: /app
+      type: bind
+  
+  # Development command
+  command: [
+    "sh", "-c",
+    "go mod download && "
+    "go build -o dns-egress-control . && "
+    "./dns-egress-control -port 5353 -use-iptables=false"
+  ]
+  
+  # Exposed ports for development
+  ports:
+    - "5353/udp"
+    - "5353/tcp"
+  
+  # Files to watch for changes
+  watch:
+    - "*.go"
+    - "go.mod"
+    - "go.sum"
+
+# Health check
+health:
+  command: [
+    "sh", "-c",
+    "nc -z -w 2 localhost 53 >/dev/null 2>&1 || exit 1"
+  ]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 5s
