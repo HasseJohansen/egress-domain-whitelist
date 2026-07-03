@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/HasseJohansen/egress-domain-whitelist/ebpf"
 	"github.com/miekg/dns"
 )
 
@@ -105,23 +107,31 @@ type DNSResolver struct {
 	cache       *DomainCache
 	upstreamDNS string
 	client      *dns.Client
+	config      *Config
 }
 
 // NewDNSResolver creates a new DNS resolver
-func NewDNSResolver(upstreamDNS string, cache *DomainCache) *DNSResolver {
+func NewDNSResolver(upstreamDNS string, cache *DomainCache, config *Config) *DNSResolver {
 	return &DNSResolver{
 		cache:       cache,
 		upstreamDNS: upstreamDNS,
 		client:      new(dns.Client),
+		config:      config,
 	}
 }
 
 // Resolve resolves a domain and caches the result
 func (r *DNSResolver) Resolve(domain string) ([]net.IP, error) {
+	ips, _, err := r.ResolveWithTTL(domain)
+	return ips, err
+}
+
+// ResolveWithTTL resolves a domain and returns IPs with their TTL
+func (r *DNSResolver) ResolveWithTTL(domain string) ([]net.IP, time.Duration, error) {
 	// Check cache first
 	if record := r.cache.Get(domain); record != nil {
-		log.Printf("Cache hit for %s, returning %v", domain, record.IPs)
-		return record.IPs, nil
+		log.Printf("Cache hit for %s, returning %v (TTL: %v)", domain, record.IPs, record.TTL)
+		return record.IPs, record.TTL, nil
 	}
 
 	log.Printf("Cache miss for %s, resolving...", domain)
@@ -132,11 +142,11 @@ func (r *DNSResolver) Resolve(domain string) ([]net.IP, error) {
 
 	resp, _, err := r.client.Exchange(msg, r.upstreamDNS)
 	if err != nil {
-		return nil, fmt.Errorf("DNS query failed: %v", err)
+		return nil, 0, fmt.Errorf("DNS query failed: %v", err)
 	}
 
 	if resp.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("DNS query returned non-success code: %d", resp.Rcode)
+		return nil, 0, fmt.Errorf("DNS query returned non-success code: %d", resp.Rcode)
 	}
 
 	var ips []net.IP
@@ -155,36 +165,88 @@ func (r *DNSResolver) Resolve(domain string) ([]net.IP, error) {
 	}
 
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no A records found for %s", domain)
+		return nil, 0, fmt.Errorf("no A records found for %s", domain)
+	}
+
+	// Apply TTL bounds from configuration
+	ttl := time.Duration(minTTL) * time.Second
+	if r.config != nil {
+		if ttl < r.config.MinTTL {
+			ttl = r.config.MinTTL
+		}
+		if ttl > r.config.MaxTTL {
+			ttl = r.config.MaxTTL
+		}
+	} else {
+		// Use reasonable defaults if config is not set
+		const defaultMinTTL = 5 * time.Second
+		const defaultMaxTTL = 24 * time.Hour
+		if ttl < defaultMinTTL {
+			ttl = defaultMinTTL
+		}
+		if ttl > defaultMaxTTL {
+			ttl = defaultMaxTTL
+		}
 	}
 
 	// Cache the result
-	ttl := time.Duration(minTTL) * time.Second
 	r.cache.Set(domain, ips, ttl)
 
-	return ips, nil
+	log.Printf("Resolved %s -> %v (TTL: %v)", domain, ips, ttl)
+	return ips, ttl, nil
 }
 
 // FirewallManager interface for different firewall implementations
 type FirewallManager interface {
 	Setup() error
 	AllowIP(ip net.IP) error
+	AllowIPWithTTL(ip net.IP, ttl time.Duration) error
 	RemoveIP(ip net.IP) error
 	Cleanup() error
+	CleanupExpired() error
+	Close() error
+}
+
+// IPEntry represents an IP with its expiration time
+type IPEntry struct {
+	IP        string
+	ExpiresAt time.Time
 }
 
 // IPTablesManager manages iptables rules for IP whitelisting
 type IPTablesManager struct {
-	mu         sync.Mutex
-	allowedIPs map[string]bool
-	chainName  string
+	mu          sync.Mutex
+	allowedIPs  map[string]*IPEntry
+	chainName   string
+	cleanupDone chan struct{}
 }
 
 // NewIPTablesManager creates a new iptables manager
 func NewIPTablesManager() *IPTablesManager {
-	return &IPTablesManager{
-		allowedIPs: make(map[string]bool),
-		chainName:  "EGRESS_WHITELIST",
+	m := &IPTablesManager{
+		allowedIPs:  make(map[string]*IPEntry),
+		chainName:   "EGRESS_WHITELIST",
+		cleanupDone: make(chan struct{}),
+	}
+	// Start background cleanup goroutine
+	go m.cleanupLoop()
+	return m
+}
+
+// cleanupLoop periodically removes expired IPs
+func (m *IPTablesManager) cleanupLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := m.CleanupExpired(); err != nil {
+				log.Printf("Error during cleanup: %v", err)
+			}
+		case <-m.cleanupDone:
+			return
+		}
 	}
 }
 
@@ -221,25 +283,9 @@ func (m *IPTablesManager) Setup() error {
 	return nil
 }
 
-// AllowIP adds an IP to the allowed list
+// AllowIP adds an IP to the allowed list with default TTL
 func (m *IPTablesManager) AllowIP(ip net.IP) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	ipStr := ip.String()
-	if m.allowedIPs[ipStr] {
-		return nil // Already allowed
-	}
-
-	// Add rule to allow this IP (insert at beginning to prioritize)
-	cmd := fmt.Sprintf("iptables -I %s -d %s -j ACCEPT", m.chainName, ipStr)
-	if err := runCommand(cmd); err != nil {
-		return fmt.Errorf("failed to allow IP %s: %v", ipStr, err)
-	}
-
-	m.allowedIPs[ipStr] = true
-	log.Printf("Allowed IP: %s", ipStr)
-	return nil
+	return m.AllowIPWithTTL(ip, 300*time.Second)
 }
 
 // RemoveIP removes an IP from the allowed list
@@ -248,18 +294,94 @@ func (m *IPTablesManager) RemoveIP(ip net.IP) error {
 	defer m.mu.Unlock()
 
 	ipStr := ip.String()
-	if !m.allowedIPs[ipStr] {
+	_, exists := m.allowedIPs[ipStr]
+	if !exists {
 		return nil // Not in the list
 	}
 
 	// Remove the rule
-	cmd := fmt.Sprintf("iptables -D %s -d %s -j ACCEPT", m.chainName, ipStr)
-	if err := runCommand(cmd); err != nil {
-		return fmt.Errorf("failed to remove IP %s: %v", ipStr, err)
-	}
+	cmd := fmt.Sprintf("iptables -D %s -d %s -j ACCEPT 2>/dev/null || true", m.chainName, ipStr)
+	runCommand(cmd)
 
 	delete(m.allowedIPs, ipStr)
 	log.Printf("Removed IP: %s", ipStr)
+	return nil
+}
+
+// AllowIPWithTTL adds an IP to the allowed list with TTL
+func (m *IPTablesManager) AllowIPWithTTL(ip net.IP, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ipStr := ip.String()
+	
+	// If already exists, update TTL if new TTL extends expiration
+	if entry, exists := m.allowedIPs[ipStr]; exists {
+		newExpiresAt := time.Now().Add(ttl)
+		if time.Now().Before(entry.ExpiresAt) && newExpiresAt.After(entry.ExpiresAt) {
+			// Entry is still valid but new TTL extends it - update the iptables rule and expiration
+			cmd := fmt.Sprintf("iptables -D %s -d %s -j ACCEPT 2>/dev/null || true", m.chainName, ipStr)
+			runCommand(cmd)
+			cmd = fmt.Sprintf("iptables -I %s -d %s -j ACCEPT", m.chainName, ipStr)
+			if err := runCommand(cmd); err != nil {
+				return fmt.Errorf("failed to update IP %s: %v", ipStr, err)
+			}
+			entry.ExpiresAt = newExpiresAt
+			log.Printf("Updated IP TTL: %s (new expires at %s)", ipStr, entry.ExpiresAt.Format(time.RFC3339))
+			return nil
+		}
+		if time.Now().Before(entry.ExpiresAt) {
+			// Still valid and new TTL doesn't extend it, keep existing
+			return nil
+		}
+		// Expired, remove old iptables rule first
+		cmd := fmt.Sprintf("iptables -D %s -d %s -j ACCEPT 2>/dev/null || true", m.chainName, ipStr)
+		runCommand(cmd)
+	}
+
+	// Add rule to allow this IP (insert at beginning to prioritize)
+	cmd := fmt.Sprintf("iptables -I %s -d %s -j ACCEPT", m.chainName, ipStr)
+	if err := runCommand(cmd); err != nil {
+		return fmt.Errorf("failed to allow IP %s: %v", ipStr, err)
+	}
+
+	// Store with expiration
+	m.allowedIPs[ipStr] = &IPEntry{
+		IP:        ipStr,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	log.Printf("Allowed IP: %s (expires at %s)", ipStr, m.allowedIPs[ipStr].ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+// CleanupExpired removes expired IPs from iptables
+func (m *IPTablesManager) CleanupExpired() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	var toRemove []string
+
+	for ipStr, entry := range m.allowedIPs {
+		if now.After(entry.ExpiresAt) {
+			toRemove = append(toRemove, ipStr)
+		}
+	}
+
+	// Remove expired IPs
+	for _, ipStr := range toRemove {
+		cmd := fmt.Sprintf("iptables -D %s -d %s -j ACCEPT 2>/dev/null || true", m.chainName, ipStr)
+		runCommand(cmd)
+		delete(m.allowedIPs, ipStr)
+		log.Printf("Removed expired IP: %s", ipStr)
+	}
+
+	return nil
+}
+
+// Close signals the cleanup goroutine to stop
+func (m *IPTablesManager) Close() error {
+	close(m.cleanupDone)
 	return nil
 }
 
@@ -306,15 +428,133 @@ func runCommand(cmd string) error {
 	return nil
 }
 
+// =============================================================================
+// Mock Firewall Manager for Testing
+// =============================================================================
+
+// MockFirewallManager is a mock implementation for testing that doesn't require iptables
+type MockFirewallManager struct {
+	mu          sync.Mutex
+	allowedIPs  map[string]*IPEntry
+	cleanupDone chan struct{}
+}
+
+// NewMockFirewallManager creates a new mock firewall manager
+func NewMockFirewallManager() *MockFirewallManager {
+	return &MockFirewallManager{
+		allowedIPs:  make(map[string]*IPEntry),
+		cleanupDone: make(chan struct{}),
+	}
+}
+
+// Setup is a no-op for mock
+func (m *MockFirewallManager) Setup() error {
+	return nil
+}
+
+// AllowIP adds an IP to the allowed list with default TTL
+func (m *MockFirewallManager) AllowIP(ip net.IP) error {
+	return m.AllowIPWithTTL(ip, 300*time.Second)
+}
+
+// AllowIPWithTTL adds an IP to the allowed list with TTL
+func (m *MockFirewallManager) AllowIPWithTTL(ip net.IP, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ipStr := ip.String()
+	
+	// If already exists, update TTL if new TTL extends expiration
+	if entry, exists := m.allowedIPs[ipStr]; exists {
+		newExpiresAt := time.Now().Add(ttl)
+		if time.Now().Before(entry.ExpiresAt) && newExpiresAt.After(entry.ExpiresAt) {
+			// Entry is still valid but new TTL extends it - update expiration
+			entry.ExpiresAt = newExpiresAt
+			log.Printf("Mock: Updated IP TTL: %s (new expires at %s)", ipStr, entry.ExpiresAt.Format(time.RFC3339))
+			return nil
+		}
+		if time.Now().Before(entry.ExpiresAt) {
+			// Still valid and new TTL doesn't extend it, keep existing
+			return nil
+		}
+		// Expired, remove old entry first
+		delete(m.allowedIPs, ipStr)
+	}
+
+	// Store with expiration
+	m.allowedIPs[ipStr] = &IPEntry{
+		IP:        ipStr,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	log.Printf("Mock: Allowed IP: %s (expires at %s)", ipStr, m.allowedIPs[ipStr].ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+// RemoveIP removes an IP from the allowed list
+func (m *MockFirewallManager) RemoveIP(ip net.IP) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ipStr := ip.String()
+	delete(m.allowedIPs, ipStr)
+	log.Printf("Mock: Removed IP: %s", ipStr)
+	return nil
+}
+
+// Cleanup removes all rules (no-op for mock)
+func (m *MockFirewallManager) Cleanup() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	m.allowedIPs = make(map[string]*IPEntry)
+	log.Printf("Mock: Cleanup completed")
+	return nil
+}
+
+// CleanupExpired removes expired IPs
+func (m *MockFirewallManager) CleanupExpired() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	var toRemove []string
+
+	for ipStr, entry := range m.allowedIPs {
+		if now.After(entry.ExpiresAt) {
+			toRemove = append(toRemove, ipStr)
+		}
+	}
+
+	// Remove expired IPs
+	for _, ipStr := range toRemove {
+		delete(m.allowedIPs, ipStr)
+		log.Printf("Mock: Removed expired IP: %s", ipStr)
+	}
+
+	return nil
+}
+
+// Close signals the cleanup goroutine to stop
+func (m *MockFirewallManager) Close() error {
+	close(m.cleanupDone)
+	return nil
+}
+
 // Config holds the application configuration
 type Config struct {
 	Interface        string
-	UpstreamDNS      string
+	UpstreamDNS      string // Keep for backward compatibility
 	Domains          []string
 	Port             int
 	RefreshInterval  time.Duration
 	UseIPTables      bool
 	UseEBPF         bool
+	// TTL configuration
+	DefaultTTL time.Duration // Default TTL when DNS doesn't specify
+	MinTTL     time.Duration // Minimum TTL to use
+	MaxTTL     time.Duration // Maximum TTL to use
+	// DNS Server restriction
+	DNSServers []string // List of allowed DNS server IPs (extracted from UpstreamDNS)
 }
 
 // DefaultConfig returns the default configuration
@@ -325,8 +565,11 @@ func DefaultConfig() *Config {
 		Domains:          []string{},
 		Port:             53,
 		RefreshInterval:  300 * time.Second,
-		UseIPTables:      true,
-		UseEBPF:         false, // eBPF requires kernel support and compilation
+		UseIPTables:      false, // Prefer eBPF
+		UseEBPF:         true,
+		DefaultTTL:       300 * time.Second,
+		MinTTL:           5 * time.Second,
+		MaxTTL:           24 * time.Hour,
 	}
 }
 
@@ -335,17 +578,43 @@ func LoadConfig() *Config {
 	config := DefaultConfig()
 
 	flag.StringVar(&config.Interface, "interface", config.Interface, "Network interface to monitor")
-	flag.StringVar(&config.UpstreamDNS, "upstream-dns", config.UpstreamDNS, "Upstream DNS server")
+	flag.StringVar(&config.UpstreamDNS, "upstream-dns", config.UpstreamDNS, "Upstream DNS server(s), comma-separated")
 	flag.IntVar(&config.Port, "port", config.Port, "DNS server port")
 	flag.DurationVar(&config.RefreshInterval, "refresh-interval", config.RefreshInterval, "DNS refresh interval")
 	flag.BoolVar(&config.UseIPTables, "use-iptables", config.UseIPTables, "Use iptables for filtering")
-	flag.BoolVar(&config.UseEBPF, "use-ebpf", config.UseEBPF, "Use eBPF for filtering (experimental)")
+	flag.BoolVar(&config.UseEBPF, "use-ebpf", config.UseEBPF, "Use eBPF for filtering")
+	flag.DurationVar(&config.DefaultTTL, "default-ttl", config.DefaultTTL, "Default TTL for allowed IPs")
+	flag.DurationVar(&config.MinTTL, "min-ttl", config.MinTTL, "Minimum TTL to use")
+	flag.DurationVar(&config.MaxTTL, "max-ttl", config.MaxTTL, "Maximum TTL to use")
 
 	domains := flag.String("domains", "", "Comma-separated list of domains to pre-whitelist")
 	flag.Parse()
 
 	if *domains != "" {
 		config.Domains = strings.Split(*domains, ",")
+	}
+
+	// Parse upstream DNS servers (comma-separated) and extract IPs
+	if config.UpstreamDNS != "" {
+		servers := strings.Split(config.UpstreamDNS, ",")
+		for _, server := range servers {
+			server = strings.TrimSpace(server)
+			// Remove port if present (format: ip:port)
+			if strings.Contains(server, ":") {
+				// Check if this is IPv6 (has multiple colons) or IPv4 with port
+				if strings.Count(server, ":") > 1 {
+					// IPv6 - use as is
+					config.DNSServers = append(config.DNSServers, server)
+				} else {
+					// IPv4:port - extract just the IP
+					ip := strings.Split(server, ":")[0]
+					config.DNSServers = append(config.DNSServers, ip)
+				}
+			} else {
+				// Just an IP
+				config.DNSServers = append(config.DNSServers, server)
+			}
+		}
 	}
 
 	return config
@@ -362,7 +631,7 @@ type DNSServer struct {
 // NewDNSServer creates a new DNS server
 func NewDNSServer(config *Config, cache *DomainCache, manager FirewallManager) *DNSServer {
 	return &DNSServer{
-		resolver: NewDNSResolver(config.UpstreamDNS, cache),
+		resolver: NewDNSResolver(config.UpstreamDNS, cache, config),
 		config:   config,
 		cache:    cache,
 		manager:  manager,
@@ -388,9 +657,9 @@ func (s *DNSServer) HandleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// Resolve the domain
+	// Resolve the domain with TTL
 	domain := strings.TrimSuffix(question.Name, ".")
-	ips, err := s.resolver.Resolve(domain)
+	ips, ttl, err := s.resolver.ResolveWithTTL(domain)
 	if err != nil {
 		log.Printf("Failed to resolve %s: %v", domain, err)
 		msg.Rcode = dns.RcodeServerFailure
@@ -398,9 +667,9 @@ func (s *DNSServer) HandleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// Add the resolved IPs to the allowed list
+	// Add the resolved IPs to the allowed list with TTL
 	for _, ip := range ips {
-		if err := s.manager.AllowIP(ip); err != nil {
+		if err := s.manager.AllowIPWithTTL(ip, ttl); err != nil {
 			log.Printf("Failed to allow IP %s: %v", ip.String(), err)
 		}
 	}
@@ -408,11 +677,11 @@ func (s *DNSServer) HandleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	// Create the response
 	for _, ip := range ips {
 		msg.Answer = append(msg.Answer, &dns.A{
-			Hdr: dns.RR_Hdr{
+			Hdr: dns.RR_Header{
 				Name:   question.Name,
 				Rrtype: dns.TypeA,
 				Class:  dns.ClassINET,
-				Ttl:    uint32(s.cache.Get(domain).TTL.Seconds()),
+				Ttl:    uint32(ttl.Seconds()),
 			},
 			A: ip,
 		})
@@ -423,13 +692,14 @@ func (s *DNSServer) HandleDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 // Start starts the DNS server
 func (s *DNSServer) Start() error {
-	dns.HandleFunc(".", s.HandleDNS)
+	mux := dns.NewServeMux()
+	mux.HandleFunc(".", s.HandleDNS)
 
 	// Start the DNS server
 	server := &dns.Server{
 		Addr:    fmt.Sprintf(":%d", s.config.Port),
 		Net:     "udp",
-		Handler: dns.NewServeMux(),
+		Handler: mux,
 	}
 
 	log.Printf("Starting DNS server on port %d", s.config.Port)
@@ -450,15 +720,15 @@ func (s *DNSServer) DomainMonitor() {
 	for range ticker.C {
 		for _, domain := range s.config.Domains {
 			// Resolve the domain to refresh the cache and rules
-			ips, err := s.resolver.Resolve(domain)
+			ips, ttl, err := s.resolver.ResolveWithTTL(domain)
 			if err != nil {
 				log.Printf("Failed to refresh domain %s: %v", domain, err)
 				continue
 			}
 
-			// Update the rules
+			// Update the rules with TTL
 			for _, ip := range ips {
-				if err := s.manager.AllowIP(ip); err != nil {
+				if err := s.manager.AllowIPWithTTL(ip, ttl); err != nil {
 					log.Printf("Failed to allow IP %s for domain %s: %v", ip.String(), domain, err)
 				}
 			}
@@ -503,19 +773,57 @@ func main() {
 
 	// Create firewall manager
 	var manager FirewallManager
+	var managerCleanup func() error
+	
 	if config.UseEBPF {
-		// In a real implementation, we would create an eBPF manager
-		log.Printf("eBPF support not yet fully implemented, falling back to iptables")
-		manager = NewIPTablesManager()
+		// Try to create eBPF manager
+		ebpfConfig := &ebpf.Config{
+			Interface:    config.Interface,
+			ProgramsPath: "./ebpf/compiled",
+			DefaultTTL:   config.DefaultTTL,
+			MinTTL:       config.MinTTL,
+			MaxTTL:       config.MaxTTL,
+			DNSServers:   config.DNSServers,
+		}
+		
+		// Check if eBPF programs exist
+		if _, err := os.Stat(filepath.Join(ebpfConfig.ProgramsPath, "dns_intercept.o")); err == nil {
+			mgr, err := ebpf.NewManager(ebpfConfig)
+			if err != nil {
+				log.Printf("Warning: Failed to create eBPF manager: %v, falling back to iptables", err)
+				manager = NewIPTablesManager()
+				managerCleanup = func() error { return manager.Cleanup() }
+			} else {
+				if err := mgr.Setup(); err != nil {
+					log.Printf("Warning: Failed to setup eBPF programs: %v, falling back to iptables", err)
+					mgr.Close()
+					manager = NewIPTablesManager()
+					managerCleanup = func() error { return manager.Cleanup() }
+				} else {
+					manager = mgr
+					managerCleanup = func() error { return mgr.Cleanup() }
+					log.Printf("Using eBPF for DNS egress control on interface %s", config.Interface)
+				}
+			}
+		} else {
+			log.Printf("eBPF programs not found at %s, falling back to iptables", ebpfConfig.ProgramsPath)
+			manager = NewIPTablesManager()
+			managerCleanup = func() error { return manager.Cleanup() }
+		}
 	} else {
 		manager = NewIPTablesManager()
+		managerCleanup = func() error { return manager.Cleanup() }
 	}
 
 	if err := manager.Setup(); err != nil {
 		log.Printf("Warning: Failed to setup firewall: %v", err)
 		log.Printf("Running in DNS-only mode (no traffic filtering)")
 	}
-	defer manager.Cleanup()
+	defer func() {
+		if managerCleanup != nil {
+			managerCleanup()
+		}
+	}()
 
 	// Create DNS server
 	server := NewDNSServer(config, cache, manager)
@@ -533,13 +841,13 @@ func main() {
 
 	// Pre-resolve configured domains
 	for _, domain := range config.Domains {
-		ips, err := server.resolver.Resolve(domain)
+		ips, ttl, err := server.resolver.ResolveWithTTL(domain)
 		if err != nil {
 			log.Printf("Failed to pre-resolve domain %s: %v", domain, err)
 			continue
 		}
 		for _, ip := range ips {
-			if err := manager.AllowIP(ip); err != nil {
+			if err := manager.AllowIPWithTTL(ip, ttl); err != nil {
 				log.Printf("Failed to allow IP %s for domain %s: %v", ip.String(), domain, err)
 			}
 		}

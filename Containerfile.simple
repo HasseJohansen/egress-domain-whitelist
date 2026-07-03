@@ -6,7 +6,7 @@ FROM golang:1.21-alpine
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies for Go
 RUN apk add --no-cache \
     git \
     ca-certificates \
@@ -19,12 +19,15 @@ RUN apk add --no-cache \
 
 # Copy source files
 COPY go.mod .
+COPY go.sum .
 COPY main.go .
+COPY ebpf/ ./ebpf/
 
 # Initialize Go modules and build
 # We'll use the miekg/dns package which is a pure Go DNS library
 RUN go get github.com/miekg/dns@v1.1.58 && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
+    go get github.com/cilium/ebpf@v0.11.0 && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dns-egress-control .
 
 # Set permissions
 RUN chmod +x /app/dns-egress-control

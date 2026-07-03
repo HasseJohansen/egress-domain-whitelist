@@ -1,0 +1,95 @@
+# Ubuntu-based Containerfile for eBPF support
+# This uses Ubuntu which has BPF headers available
+
+# Build stage
+FROM ubuntu:24.04 AS builder
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    curl \
+    wget \
+    # Go
+    golang-go \
+    # eBPF compilation tools with CO-RE support
+    clang \
+    llvm \
+    libelf-dev \
+    linux-headers-generic \
+    linux-libc-dev \
+    libbpf-dev \
+    libbpf0.8 \
+    # BTF and CO-RE tools
+    bpftool \
+    dwarfutils \
+    elfutils \
+    pahole \
+    make \
+    gcc \
+    pkg-config \
+    # Network tools
+    iptables \
+    iproute2 \
+    bind9utils \
+    dnsutils \
+    net-tools \
+    && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy source files
+COPY go.mod .
+COPY go.sum .
+COPY main.go .
+COPY ebpf/ ./ebpf/
+
+# Build eBPF programs with CO-RE support
+RUN cd ebpf && \
+    # Make scripts executable
+    chmod +x scripts/fetch_btf.sh && \
+    # Build with CO-RE vmlinux.h generation
+    make && \
+    cd ..
+
+# Build Go application
+RUN go get github.com/miekg/dns@v1.1.58 && \
+    go get github.com/cilium/ebpf@v0.11.0 && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
+
+# Runtime stage
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    iptables \
+    iproute2 \
+    bind9utils \
+    dnsutils \
+    net-tools \
+    curl \
+    libelf1 \
+    && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy binary and eBPF programs from builder
+COPY --from=builder /app/dns-egress-control .
+COPY --from=builder /app/ebpf/compiled/ ./ebpf/compiled/
+
+# Expose DNS port
+EXPOSE 53/udp
+EXPOSE 53/tcp
+
+# Set default command - use iptables by default since eBPF needs specific setup
+CMD ["./dns-egress-control", "-interface", "eth0", "-upstream-dns", "8.8.8.8:53", "-port", "53", "-use-iptables=true", "-use-ebpf=false"]
