@@ -22,13 +22,12 @@ RUN apt-get update && \
     libelf-dev \
     linux-headers-generic \
     linux-libc-dev \
+    linux-headers-6.8.0-134-generic \
     libbpf-dev \
-    libbpf0.8 \
     # BTF and CO-RE tools
-    bpftool \
-    dwarfutils \
+    linux-tools-common \
+    dwarves \
     elfutils \
-    pahole \
     make \
     gcc \
     pkg-config \
@@ -60,7 +59,7 @@ RUN cd ebpf && \
 # Build Go application
 RUN go get github.com/miekg/dns@v1.1.58 && \
     go get github.com/cilium/ebpf@v0.11.0 && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o dns-egress-control .
 
 # Runtime stage
 FROM ubuntu:24.04

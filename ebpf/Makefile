@@ -21,7 +21,8 @@ endif
 CORE_CFLAGS := -D__TARGET_ARCH_$(TARGET_ARCH) -D__BPF_TRACING__
 
 # Include paths - use vmlinux.h for CO-RE instead of direct kernel headers
-INCLUDES := -I. -I./include -I../include $(CORE_CFLAGS)
+# Add standard kernel header paths for multiple architectures
+INCLUDES := -I. -I./include -I../include -I/usr/include/linux -I/usr/src/linux-headers-generic/include -I/usr/include/aarch64-linux-gnu -I/usr/include/asm-generic $(CORE_CFLAGS)
 
 # Source files
 SRCS := src/dns_intercept.c src/conn_filter.c
