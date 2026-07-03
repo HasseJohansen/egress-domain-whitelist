@@ -557,6 +557,271 @@ func (r *HostRepository) UpdateLastSeenOlderThan(cutoff time.Time) error {
 	return nil
 }
 
+// HostGroupRepository handles host group database operations
+type HostGroupRepository struct {
+	db *Database
+}
+
+// NewHostGroupRepository creates a new host group repository
+func NewHostGroupRepository(db *Database) *HostGroupRepository {
+	return &HostGroupRepository{db: db}
+}
+
+// Create creates a new host group
+func (r *HostGroupRepository) Create(group *models.HostGroup) error {
+	group.CreatedAt = time.Now()
+
+	query := `INSERT INTO host_groups (name, config_id, created_at) VALUES (?, ?, ?)`
+
+	result, err := r.db.DB.Exec(query,
+		group.Name,
+		group.ConfigID,
+		group.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create host group: %v", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("failed to get last insert id: %v", err)
+	}
+	group.ID = uint(id)
+
+	return nil
+}
+
+// GetByID retrieves a host group by ID
+func (r *HostGroupRepository) GetByID(id uint) (*models.HostGroup, error) {
+	query := `SELECT id, name, config_id, created_at FROM host_groups WHERE id = ?`
+
+	var group models.HostGroup
+	err := r.db.DB.QueryRow(query, id).Scan(
+		&group.ID,
+		&group.Name,
+		&group.ConfigID,
+		&group.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get host group: %v", err)
+	}
+
+	return &group, nil
+}
+
+// GetByName retrieves a host group by name
+func (r *HostGroupRepository) GetByName(name string) (*models.HostGroup, error) {
+	query := `SELECT id, name, config_id, created_at FROM host_groups WHERE name = ?`
+
+	var group models.HostGroup
+	err := r.db.DB.QueryRow(query, name).Scan(
+		&group.ID,
+		&group.Name,
+		&group.ConfigID,
+		&group.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get host group: %v", err)
+	}
+
+	return &group, nil
+}
+
+// List retrieves all host groups
+func (r *HostGroupRepository) List() ([]*models.HostGroup, error) {
+	query := `SELECT id, name, config_id, created_at FROM host_groups ORDER BY name`
+
+	rows, err := r.db.DB.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list host groups: %v", err)
+	}
+	defer rows.Close()
+
+	var groups []*models.HostGroup
+	for rows.Next() {
+		var group models.HostGroup
+		err := rows.Scan(
+			&group.ID,
+			&group.Name,
+			&group.ConfigID,
+			&group.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan host group: %v", err)
+		}
+		groups = append(groups, &group)
+	}
+
+	return groups, nil
+}
+
+// Update updates a host group
+func (r *HostGroupRepository) Update(group *models.HostGroup) error {
+	query := `UPDATE host_groups SET name = ?, config_id = ? WHERE id = ?`
+
+	_, err := r.db.DB.Exec(query,
+		group.Name,
+		group.ConfigID,
+		group.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update host group: %v", err)
+	}
+
+	return nil
+}
+
+// Delete deletes a host group
+func (r *HostGroupRepository) Delete(id uint) error {
+	query := `DELETE FROM host_groups WHERE id = ?`
+	_, err := r.db.DB.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete host group: %v", err)
+	}
+	return nil
+}
+
+// DynamicHostGroupRepository handles dynamic host group database operations
+type DynamicHostGroupRepository struct {
+	db *Database
+}
+
+// NewDynamicHostGroupRepository creates a new dynamic host group repository
+func NewDynamicHostGroupRepository(db *Database) *DynamicHostGroupRepository {
+	return &DynamicHostGroupRepository{db: db}
+}
+
+// Create creates a new dynamic host group
+func (r *DynamicHostGroupRepository) Create(group *models.DynamicHostGroup) error {
+	group.CreatedAt = time.Now()
+
+	query := `INSERT INTO dynamic_host_groups (name, pattern, config_id, created_at) VALUES (?, ?, ?, ?)`
+
+	result, err := r.db.DB.Exec(query,
+		group.Name,
+		group.Pattern,
+		group.ConfigID,
+		group.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic host group: %v", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("failed to get last insert id: %v", err)
+	}
+	group.ID = uint(id)
+
+	return nil
+}
+
+// GetByID retrieves a dynamic host group by ID
+func (r *DynamicHostGroupRepository) GetByID(id uint) (*models.DynamicHostGroup, error) {
+	query := `SELECT id, name, pattern, config_id, created_at FROM dynamic_host_groups WHERE id = ?`
+
+	var group models.DynamicHostGroup
+	err := r.db.DB.QueryRow(query, id).Scan(
+		&group.ID,
+		&group.Name,
+		&group.Pattern,
+		&group.ConfigID,
+		&group.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get dynamic host group: %v", err)
+	}
+
+	return &group, nil
+}
+
+// GetByName retrieves a dynamic host group by name
+func (r *DynamicHostGroupRepository) GetByName(name string) (*models.DynamicHostGroup, error) {
+	query := `SELECT id, name, pattern, config_id, created_at FROM dynamic_host_groups WHERE name = ?`
+
+	var group models.DynamicHostGroup
+	err := r.db.DB.QueryRow(query, name).Scan(
+		&group.ID,
+		&group.Name,
+		&group.Pattern,
+		&group.ConfigID,
+		&group.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get dynamic host group: %v", err)
+	}
+
+	return &group, nil
+}
+
+// List retrieves all dynamic host groups
+func (r *DynamicHostGroupRepository) List() ([]*models.DynamicHostGroup, error) {
+	query := `SELECT id, name, pattern, config_id, created_at FROM dynamic_host_groups ORDER BY name`
+
+	rows, err := r.db.DB.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list dynamic host groups: %v", err)
+	}
+	defer rows.Close()
+
+	var groups []*models.DynamicHostGroup
+	for rows.Next() {
+		var group models.DynamicHostGroup
+		err := rows.Scan(
+			&group.ID,
+			&group.Name,
+			&group.Pattern,
+			&group.ConfigID,
+			&group.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan dynamic host group: %v", err)
+		}
+		groups = append(groups, &group)
+	}
+
+	return groups, nil
+}
+
+// Update updates a dynamic host group
+func (r *DynamicHostGroupRepository) Update(group *models.DynamicHostGroup) error {
+	query := `UPDATE dynamic_host_groups SET name = ?, pattern = ?, config_id = ? WHERE id = ?`
+
+	_, err := r.db.DB.Exec(query,
+		group.Name,
+		group.Pattern,
+		group.ConfigID,
+		group.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update dynamic host group: %v", err)
+	}
+
+	return nil
+}
+
+// Delete deletes a dynamic host group
+func (r *DynamicHostGroupRepository) Delete(id uint) error {
+	query := `DELETE FROM dynamic_host_groups WHERE id = ?`
+	_, err := r.db.DB.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete dynamic host group: %v", err)
+	}
+	return nil
+}
+
 // Helper functions for JSON arrays
 func jsonArray(slice []string) string {
 	if len(slice) == 0 {

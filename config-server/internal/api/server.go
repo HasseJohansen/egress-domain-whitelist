@@ -3,10 +3,8 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,24 +17,46 @@ import (
 	"github.com/go-chi/cors"
 )
 
+// WebSocketConfig holds WebSocket configuration
+type WebSocketConfig struct {
+	ReadBufferSize  int
+	WriteBufferSize int
+	PingInterval    time.Duration
+	PongWait        time.Duration
+}
+
 // ServerConfig holds the configuration for the API server
 type ServerConfig struct {
-	ConfigRepo      *db.ConfigurationRepository
-	HostRepo        *db.HostRepository
-	AuthService     *auth.AuthServiceWithPassword
-	Port           int
-	DevMode        bool
-	SessionTimeout time.Duration
+	ConfigRepo         *db.ConfigurationRepository
+	HostRepo           *db.HostRepository
+	GroupRepo         *db.HostGroupRepository
+	DynamicGroupRepo  *db.DynamicHostGroupRepository
+	AuthService        *auth.AuthServiceWithPassword
+	Port              int
+	DevMode           bool
+	SessionTimeout    time.Duration
+	WebSocketConfig   *WebSocketConfig
 }
 
 // Server represents the API server
 type Server struct {
 	config *ServerConfig
 	router *chi.Mux
+	hub    *Hub
 }
 
 // NewServer creates a new API server
 func NewServer(config *ServerConfig) (*Server, error) {
+	// Set default WebSocket config if not provided
+	if config.WebSocketConfig == nil {
+		config.WebSocketConfig = &WebSocketConfig{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			PingInterval:    30 * time.Second,
+			PongWait:        60 * time.Second,
+		}
+	}
+
 	s := &Server{
 		config: config,
 		router: chi.NewRouter(),
@@ -44,6 +64,10 @@ func NewServer(config *ServerConfig) (*Server, error) {
 
 	s.setupMiddleware()
 	s.setupRoutes()
+	
+	// Start WebSocket hub
+	s.hub = NewHub(s.config.WebSocketConfig.PingInterval, s.config.WebSocketConfig.PongWait)
+	go s.hub.Run()
 
 	return s, nil
 }
@@ -139,8 +163,11 @@ func (s *Server) setupRoutes() {
 		})
 
 		// Status endpoints
-		r.Get("/status", s.getStatus)
-		r.Get("/health", s.getHealth)
+		r.Get("/status", s.handleStatus)
+		r.Get("/health", s.handleHealth)
+		
+		// WebSocket endpoint for real-time updates
+		r.Get("/events", s.handleWebSocket)
 	})
 
 	// Web interface routes - serve static files from embedded filesystem
@@ -164,6 +191,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Always allow health checks and status
 		if strings.HasPrefix(path, "/api/v1/status") ||
 			strings.HasPrefix(path, "/api/v1/health") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		
+		// Allow host registration without authentication (hosts will auth via other means)
+		if strings.HasPrefix(path, "/api/v1/hosts/register") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -247,13 +280,38 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	}
 }
 
+// handleStatus returns the server status
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, models.NewSuccessResponse("Server is running", map[string]interface{}{
+		"status":      "running",
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+		"clients":    len(s.hub.Clients),
+		"host_clients": len(s.hub.HostClients),
+	}))
+}
+
+// handleHealth returns the server health status
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Simple health check
+	writeJSON(w, http.StatusOK, models.NewSuccessResponse("Server is healthy", map[string]interface{}{
+		"health": "ok",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	}))
+}
+
 // writeError writes an error response
 func writeError(w http.ResponseWriter, statusCode int, message string, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
+	
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+	
 	json.NewEncoder(w).Encode(models.APIResponse{
 		Success: false,
 		Message: message,
-		Error:   err.Error(),
+		Error:   errStr,
 	})
 }

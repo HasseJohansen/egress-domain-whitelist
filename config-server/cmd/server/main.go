@@ -63,6 +63,8 @@ func main() {
 	// Initialize repositories
 	configRepo := db.NewConfigurationRepository(database)
 	hostRepo := db.NewHostRepository(database)
+	groupRepo := db.NewHostGroupRepository(database)
+	dynamicGroupRepo := db.NewDynamicHostGroupRepository(database)
 
 	// Check that password is set
 	if serverConfig.Password == "" {
@@ -89,11 +91,13 @@ func main() {
 
 	// Create API server
 	apiServer, err := api.NewServer(&api.ServerConfig{
-		ConfigRepo:  configRepo,
-		HostRepo:    hostRepo,
-		AuthService: authService,
-		Port:        serverConfig.Port,
-		DevMode:     *devMode || serverConfig.DevMode,
+		ConfigRepo:         configRepo,
+		HostRepo:           hostRepo,
+		GroupRepo:         groupRepo,
+		DynamicGroupRepo:  dynamicGroupRepo,
+		AuthService:        authService,
+		Port:              serverConfig.Port,
+		DevMode:           *devMode || serverConfig.DevMode,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create API server: %v", err)

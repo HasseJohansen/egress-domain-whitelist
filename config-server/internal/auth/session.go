@@ -35,7 +35,7 @@ func NewSessionStore(timeout time.Duration) *SessionStore {
 
 // CreateSession creates a new session
 func (s *SessionStore) CreateSession(username, ipAddress, userAgent string) *Session {
-	s.sessionID := s.generateSessionID()
+	sessionID := s.generateSessionID()
 	
 	session := &Session{
 		SessionID:  sessionID,

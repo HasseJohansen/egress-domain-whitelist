@@ -4,7 +4,6 @@ package web
 import (
 	"embed"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,9 +12,6 @@ import (
 
 //go:embed templates/*
 var templateFS embed.FS
-
-//go:embed static/*
-var staticFS embed.FS
 
 // NewHandler creates a new web interface handler
 func NewHandler() http.Handler {
@@ -35,12 +31,7 @@ func NewHandler() http.Handler {
 			return
 		}
 
-		// Try static files
-		data, err = staticFS.ReadFile(filepath.Join("static", path))
-		if err == nil {
-			w.Write(data)
-			return
-		}
+
 
 		// If we get here, try adding .html extension
 		if !strings.HasSuffix(path, ".html") {
@@ -79,7 +70,7 @@ func ServeTemplate(w http.ResponseWriter, r *http.Request, name string) {
 }
 
 // NewHandlerWithFallback creates a web handler with fallback to file system
-func NewHandlerWithFallback(templateDir, staticDir string) http.Handler {
+func NewHandlerWithFallback(templateDir string) http.Handler {
 	mux := http.NewServeMux()
 
 	// Try embedded first, then fallback to filesystem
@@ -99,33 +90,7 @@ func NewHandlerWithFallback(templateDir, staticDir string) http.Handler {
 		// Fallback to filesystem
 		if templateDir != "" {
 			fsPath := filepath.Join(templateDir, path)
-			if _, err := fs.Stat(osFS, fsPath); err == nil {
-				http.ServeFile(w, r, fsPath)
-				return
-			}
-		}
-
-		http.NotFound(w, r)
-	})
-
-	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/static/")
-		if path == "" {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Try embedded
-		data, err := staticFS.ReadFile(filepath.Join("static", path))
-		if err == nil {
-			w.Write(data)
-			return
-		}
-
-		// Fallback to filesystem
-		if staticDir != "" {
-			fsPath := filepath.Join(staticDir, path)
-			if _, err := fs.Stat(osFS, fsPath); err == nil {
+			if _, err := os.Stat(fsPath); err == nil {
 				http.ServeFile(w, r, fsPath)
 				return
 			}
@@ -150,10 +115,10 @@ func ServeTemplateContent(w http.ResponseWriter, r *http.Request, data []byte, p
 }
 
 // osFS is a helper for filesystem access
-var osFS = osFSImpl{}
+var osFS fs.FS = osFSImpl{}
 
 type osFSImpl struct{}
 
-func (osFSImpl) Stat(name string) (fs.FileInfo, error) {
-	return os.Stat(name)
+func (osFSImpl) Open(name string) (fs.File, error) {
+	return os.Open(name)
 }

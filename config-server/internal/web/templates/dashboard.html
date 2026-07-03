@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="300"> <!-- Auto-refresh every 5 minutes to check session -->
+    <title>Dashboard - Egress Filter Config Server</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+        .header {
+            background: #343a40;
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 1.25rem;
+        }
+        .header-nav {
+            display: flex;
+            gap: 1rem;
+        }
+        .header-nav a {
+            color: #adb5bd;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        .header-nav a:hover, .header-nav a.active {
+            color: white;
+            background: rgba(255,255,255,0.1);
+        }
+        .header-nav .logout-btn {
+            cursor: pointer;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 {
+            margin: 0 0 0.5rem 0;
+            color: #6c757d;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: 500;
+            color: #333;
+        }
+        .stat-card .label {
+            color: #6c757d;
+            font-size: 0.875rem;
+        }
+        .section {
+            margin-bottom: 2rem;
+        }
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .section-header h2 {
+            margin: 0;
+            color: #333;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background-color 0.2s;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .btn-success {
+            background: #28a745;
+        }
+        .btn-success:hover {
+            background: #218838;
+        }
+        .btn-danger {
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .table th, .table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .table th {
+            background: #f8f9fa;
+            font-weight: 500;
+            color: #495057;
+        }
+        .table tr:last-child td {
+            border-bottom: none;
+        }
+        .table tr:hover {
+            background: #f8f9fa;
+        }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 4px;
+        }
+        .badge-unconfigured {
+            background: #ffc107;
+            color: #212529;
+        }
+        .badge-configured {
+            background: #28a745;
+            color: white;
+        }
+        .badge-error {
+            background: #dc3545;
+            color: white;
+        }
+        .badge-warning {
+            background: #fd7e14;
+            color: white;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        .modal-header h3 {
+            margin: 0;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #6c757d;
+        }
+        .modal-close:hover {
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #333;
+        }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            box-sizing: border-box;
+        }
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0,123,255,0.25);
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+            margin-top: 1.5rem;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f8f9fa;
+            border-top: 2px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #6c757d;
+        }
+        .empty-state h3 {
+            margin: 0 0 0.5rem 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>Egress Filter Config Server</h1>
+        <nav class="header-nav">
+            <a href="/web/dashboard.html" class="active">Dashboard</a>
+            <a href="/web/hosts.html">Hosts</a>
+            <a href="/web/configurations.html">Configurations</a>
+            <a href="/web/groups.html">Groups</a>
+            <span class="logout-btn" onclick="logout()">Logout</span>
+        </nav>
+    </header>
+
+    <div class="container">
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <h3>Total Hosts</h3>
+                <div class="value" id="total-hosts">-</div>
+                <div class="label">connected to server</div>
+            </div>
+            <div class="stat-card">
+                <h3>Configured</h3>
+                <div class="value" id="configured-hosts">-</div>
+                <div class="label">hosts with active config</div>
+            </div>
+            <div class="stat-card">
+                <h3>Unconfigured</h3>
+                <div class="value" id="unconfigured-hosts">-</div>
+                <div class="label">hosts awaiting config</div>
+            </div>
+            <div class="stat-card">
+                <h3>Configurations</h3>
+                <div class="value" id="total-configs">-</div>
+                <div class="label">active configurations</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Quick Actions</h2>
+            </div>
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                <button class="btn btn-success" onclick="window.location.href='/web/configurations.html'">
+                    Create New Configuration
+                </button>
+                <button class="btn" onclick="window.location.href='/web/hosts.html'">
+                    View All Hosts
+                </button>
+                <button class="btn btn-secondary" onclick="refreshStats()">
+                    <span id="refresh-icon">Refresh Stats</span>
+                </button>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>Recent Activity</h2>
+            </div>
+            <div id="activity-log" class="empty-state">
+                <h3>No recent activity</h3>
+                <p>Activity will appear here when hosts register or configurations change</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication status
+        checkAuth();
+        
+        // Load statistics
+        loadStats();
+        
+        // Auto-refresh stats every 30 seconds
+        setInterval(loadStats, 30000);
+
+        function checkAuth() {
+            fetch('/api/v1/auth/status', {
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.data || !data.data.authenticated) {
+                    window.location.href = '/web/login.html';
+                }
+            })
+            .catch(error => {
+                window.location.href = '/web/login.html';
+            });
+        }
+
+        function loadStats() {
+            // For now, just update the UI
+            // In production, fetch from API
+            const refreshIcon = document.getElementById('refresh-icon');
+            refreshIcon.innerHTML = '<span class="loading"></span> Refreshing...';
+            
+            setTimeout(() => {
+                refreshIcon.innerHTML = 'Refresh Stats';
+            }, 1000);
+        }
+
+        function logout() {
+            fetch('/api/v1/auth/logout', {
+                method: 'POST',
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                window.location.href = '/web/login.html';
+            })
+            .catch(error => {
+                window.location.href = '/web/login.html';
+            });
+        }
+
+        // Initial stat display (placeholder)
+        document.getElementById('total-hosts').textContent = '0';
+        document.getElementById('configured-hosts').textContent = '0';
+        document.getElementById('unconfigured-hosts').textContent = '0';
+        document.getElementById('total-configs').textContent = '0';
+    </script>
+</body>
+</html>

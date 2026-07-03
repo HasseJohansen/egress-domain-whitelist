@@ -95,6 +95,7 @@ type HostAgentConfig struct {
 	ConfigServerURL string   `yaml:"config_server_url" json:"config_server_url"`
 	PollInterval    int      `yaml:"poll_interval" json:"poll_interval"` // seconds
 	LogLevel        string   `yaml:"log_level" json:"log_level"`
+	DevMode         bool     `yaml:"dev_mode" json:"dev_mode"`
 	// Local config (only used in standalone mode)
 	LocalConfig *LocalEgressConfig `yaml:"local_config,omitempty" json:"local_config,omitempty"`
 	// Managed mode flag - when true, local config is ignored
