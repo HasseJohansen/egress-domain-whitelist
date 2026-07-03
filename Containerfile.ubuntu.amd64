@@ -1,13 +1,13 @@
-# Ubuntu-based Containerfile for eBPF support - ARM64 version
+# Ubuntu-based Containerfile for eBPF support - AMD64 version
 # This uses Ubuntu which has BPF headers available
 
 # Build stage
-FROM --platform=linux/arm64 ubuntu:24.04 AS builder
+FROM --platform=linux/amd64 ubuntu:24.04 AS builder
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
+# Install build dependencies for AMD64
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     git \
@@ -22,7 +22,6 @@ RUN apt-get update && \
     libelf-dev \
     linux-headers-generic \
     linux-libc-dev \
-    linux-headers-6.8.0-134-generic \
     libbpf-dev \
     # BTF and CO-RE tools
     linux-tools-common \
@@ -56,14 +55,13 @@ RUN cd ebpf && \
     make && \
     cd ..
 
-# Build Go application
-ARG GOARCH=arm64
+# Build Go application for AMD64
 RUN go get github.com/miekg/dns@v1.1.58 && \
     go get github.com/cilium/ebpf@v0.11.0 && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -o dns-egress-control .
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dns-egress-control .
 
 # Runtime stage
-FROM --platform=linux/arm64 ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
