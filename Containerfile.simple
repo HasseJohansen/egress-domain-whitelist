@@ -2,7 +2,7 @@
 # Minimal configuration that works with Apple's container ecosystem
 
 # Use a single stage build for simplicity
-FROM golang:1.21-alpine
+FROM golang:1.27-alpine
 
 WORKDIR /app
 

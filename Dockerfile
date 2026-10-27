@@ -2,7 +2,7 @@
 # Standard Dockerfile that works with both Docker and Apple Container Tool
 
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 
