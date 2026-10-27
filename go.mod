@@ -3,7 +3,7 @@ module github.com/HasseJohansen/egress-domain-whitelist
 go 1.25.0
 
 require (
-	github.com/cilium/ebpf v0.11.0
+	github.com/cilium/ebpf v0.22.0
 	github.com/miekg/dns v1.1.73
 )
 
