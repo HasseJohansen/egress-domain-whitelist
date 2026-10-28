@@ -2,7 +2,7 @@
 # This uses Ubuntu which has BPF headers available
 
 # Build stage
-FROM --platform=linux/arm64 ubuntu:24.04 AS builder
+FROM --platform=linux/arm64 ubuntu:26.04 AS builder
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -63,7 +63,7 @@ RUN go get github.com/miekg/dns@v1.1.58 && \
     CGO_ENABLED=0 GOOS=linux GOARCH=${GOARCH} go build -o dns-egress-control .
 
 # Runtime stage
-FROM --platform=linux/arm64 ubuntu:24.04
+FROM --platform=linux/arm64 ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
