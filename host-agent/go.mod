@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/HasseJohansen/egress-domain-whitelist/config-server v0.0.0
 	github.com/cilium/ebpf v0.22.0
-	github.com/google/uuid v1.4.0
+	github.com/google/uuid v1.6.0
 	golang.org/x/net v0.20.0
 	golang.org/x/sys v0.15.0
 )
